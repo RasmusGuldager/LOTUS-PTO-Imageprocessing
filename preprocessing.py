@@ -4,10 +4,31 @@ import numpy as np
 class Preprocessor:
     @staticmethod
     def calculate_exposure_fusion(image_paths):
+        # Use Mertens exposure fusion to combine images
         img_list = [cv2.imread(f) for f in image_paths]
         merge_mertens = cv2.createMergeMertens()
         res_mertens = merge_mertens.process(img_list)
         return np.clip(res_mertens * 255, 0, 255).astype('uint8')
+    
+    @staticmethod
+    def median_stack(image_paths):
+        # Apply median stacking for all three rgb channels
+        img_list = [cv2.imread(f) for f in image_paths]
+        stack = np.stack(img_list, axis=3)
+        median_img = np.median(stack, axis=3).astype('uint8')
+        return median_img
+
+    @staticmethod
+    def average_stack(image_paths):
+        # Apply average stacking for all three rgb channels
+        img_list = [cv2.imread(f) for f in image_paths]
+        stack = np.stack(img_list, axis=3)
+        avg_img = np.mean(stack, axis=3).astype('uint8')
+        return avg_img
+    
+    @staticmethod
+    def gaussian_blur(image, sigma=50):
+        return cv2.GaussianBlur(image, (0, 0), sigmaX=sigma, sigmaY=sigma)
 
     @staticmethod
     def flatten_illumination(img_bgr, sigma=50):

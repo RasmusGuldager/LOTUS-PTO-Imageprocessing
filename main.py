@@ -6,82 +6,77 @@ from visualizer import Visualizer
 from preprocessing import Preprocessor
 
 
-def run_comprehensive_test(folder_path):
-    all_files = sorted([os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.endswith('.png')])
-    
-    baseline_mertens = None
-    baseline_flat = None
-    baseline_hsv = None
-    
-    backSub = cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=50, detectShadows=True)
-    
-    for i in range(0, len(all_files), 5):
-        chunk = all_files[i:i+5]
-        if len(chunk) < 5: break
-            
-        raw_ref = cv2.imread(chunk[2])
-        
-        # 1. Processing
-        mertens_img = Preprocessor.calculate_exposure_fusion(chunk)
-        flat_img = Preprocessor.flatten_illumination(mertens_img)
-        clahe_img = Preprocessor.apply_clahe(mertens_img)
-        current_hsv = cv2.cvtColor(mertens_img, cv2.COLOR_BGR2HSV)
-        
-        # 2. Establish baselines
-        if baseline_mertens is None:
-            baseline_mertens = cv2.cvtColor(mertens_img, cv2.COLOR_BGR2GRAY)
-            baseline_flat = flat_img.copy()
-            baseline_hsv = current_hsv.copy()
-            continue
-            
-        # 3. Temporal Differences (Stability check)
-        mertens_gray = cv2.cvtColor(mertens_img, cv2.COLOR_BGR2GRAY)
-        diff_mertens = cv2.absdiff(baseline_mertens, mertens_gray)
-        _, mask_mertens = cv2.threshold(diff_mertens, 30, 255, cv2.THRESH_BINARY)
-        
-        diff_flat = cv2.absdiff(baseline_flat, flat_img)
-        _, mask_flat = cv2.threshold(diff_flat, 30, 255, cv2.THRESH_BINARY)
+class ImageProvider:
+    def __init__(self, folder_path, chunk_size=5):
+        self.files = sorted([os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.endswith('.png')])
+        self.chunk_size = chunk_size
+        self.current_idx = 0
 
-        # 4. HSV Difference
-        diff_h = cv2.absdiff(baseline_hsv[:,:,0], current_hsv[:,:,0])
-        diff_s = cv2.absdiff(baseline_hsv[:,:,1], current_hsv[:,:,1])
-        hs_diff = cv2.add(diff_h, diff_s)
-        _, hs_mask = cv2.threshold(hs_diff, 50, 255, cv2.THRESH_BINARY)
-        _, v_mask = cv2.threshold(current_hsv[:,:,2], 40, 255, cv2.THRESH_BINARY)
-        clean_hs_mask = cv2.bitwise_and(hs_mask, v_mask)
+    def get_next_chunk(self):
+        if self.current_idx >= len(self.files) - self.chunk_size:
+            return None 
         
-        # 5. MOG2 and Canny
-        mog_mask = backSub.apply(mertens_img, learningRate=0.01)
-        _, mog_mask_clean = cv2.threshold(mog_mask, 250, 255, cv2.THRESH_BINARY)
+        chunk = self.files[self.current_idx:self.current_idx + self.chunk_size]
+        self.current_idx += self.chunk_size
+        return chunk
+
+
+
+def simple_pipeline(folder_path):
+    # 1. Initialize the provider with chunks of 5
+    provider = ImageProvider(folder_path, chunk_size=2)
+    
+    print("--- Starting Browser ---")
+    print("Controls: Press 'Q' to Quit | Press any other key for the next chunk")
+
+    while True:
+        # 2. Get next chunk
+        image_paths = provider.get_next_chunk()
         
-        edges = cv2.Canny(flat_img, 50, 150)
+        # Break if we run out of images
+        if image_paths is None:
+            print("Reached the end of the folder.")
+            break
+
+        # 3. Simple Processing Chain
+        # Step A: Load one raw image for reference
+        raw_img = cv2.imread(image_paths[0])
         
-        # 6. Apply Colormaps for visualization
-        heat_mertens = cv2.applyColorMap(mask_mertens, cv2.COLORMAP_JET)
-        heat_flat = cv2.applyColorMap(mask_flat, cv2.COLORMAP_JET)
-        heat_hsv = cv2.applyColorMap(clean_hs_mask, cv2.COLORMAP_JET)
-        heat_mog = cv2.applyColorMap(mog_mask_clean, cv2.COLORMAP_JET)
+        # Step B: Merge the 5 images (Exposure Fusion)
+        fused = Preprocessor.calculate_exposure_fusion(image_paths)
         
-        # 7. Construct Dashboard
-        frames = [
-            raw_ref, mertens_img, flat_img,
-            clahe_img, heat_mertens, heat_flat,
-            heat_mog, edges, heat_hsv
-        ]
+        # Step C: Flatten the light
+        flat = Preprocessor.flatten_illumination(fused, sigma=50)
         
-        titles = [
-            "1. Raw (Ref)", "2. Mertens Fusion", "3. Flattened",
-            "4. CLAHE", "5. Diff (Mertens)", "6. Diff (Flattened)",
-            "7. MOG2 Mask", "8. Canny Edges", "9. HSV Diff"
-        ]
+        # Step D: Final Contrast boost
+        # We convert 'flat' to BGR because your apply_clahe expects BGR
+        enhanced = Preprocessor.apply_clahe(cv2.cvtColor(flat, cv2.COLOR_GRAY2BGR))
+
+        blurred = Preprocessor.gaussian_blur(fused, sigma=2)
+
+        # 4. Visualize the 4 steps in a 2x2 grid
+        frames = [raw_img, fused, flat, enhanced, blurred]
+        titles = ["1. Raw Sample", "2. Fused Chunk", "3. Light Flattened", "4. CLAHE Enhanced", "5. Gaussian Blurred"]
         
-        display_img = Visualizer.create_3x3_dashboard(frames, titles, display_width=1800)
-        cv2.imshow("Comprehensive Pipeline Analysis", display_img)
+        dashboard = Visualizer.create_dashboard(frames, titles)
+
+        # 5. Interaction Logic
+        cv2.imshow("Underwater Processing Browser", dashboard)
         
-        if cv2.waitKey(200) & 0xFF == ord('q'):
+        # Wait for key press
+        key = cv2.waitKey(0) & 0xFF
+        if key == ord('q'):
+            print("Quitting...")
             break
 
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    run_comprehensive_test('./exposure/images')
+    PATH_TO_IMAGES = './lotus_kristineberg_prototype/images' 
+    #PATH_TO_IMAGES = './exposure/images' 
+    
+    
+    if os.path.exists(PATH_TO_IMAGES):
+        simple_pipeline(PATH_TO_IMAGES)
+    else:
+        print(f"Error: Folder '{PATH_TO_IMAGES}' not found.")
