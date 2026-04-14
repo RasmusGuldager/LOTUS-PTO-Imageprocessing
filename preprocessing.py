@@ -31,13 +31,21 @@ class Preprocessor:
         return cv2.GaussianBlur(image, (0, 0), sigmaX=sigma, sigmaY=sigma)
 
     @staticmethod
-    def flatten_illumination(img_bgr, sigma=50):
-        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-        light_map = cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    def flatten_illumination(img, sigma=50):
+        # Check if the image is already grayscale
+        if len(img.shape) == 2:
+            gray = img
+        else:
+            # Convert to grayscale for light flattening
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
         gray_float = gray.astype(np.float32)
+        
+        # Lav light map
+        light_map = cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma, sigmaY=sigma)
         light_map_float = np.maximum(light_map.astype(np.float32), 1.0)
         
+        # Division for at udjævne lyset
         flat_float = gray_float / light_map_float
         return cv2.normalize(flat_float, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 

@@ -3,7 +3,7 @@ import numpy as np
 
 class Visualizer:
     @staticmethod
-    def create_dashboard(frames, titles, rows=2, cols=3, display_width=1920):
+    def create_dashboard(frames, titles, rows=2, cols=3, display_width=1620):
         """
         Opretter et grid (f.eks. 2x2 eller 3x3). 
         Tvinger alle billeder til samme størrelse for at undgå vstack/hstack fejl.
