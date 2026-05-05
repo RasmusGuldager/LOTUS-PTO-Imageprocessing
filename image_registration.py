@@ -1,8 +1,10 @@
 import cv2
 import numpy as np
 import os
+
 from preprocessing import Preprocessor
 from image_provider import ImageProvider
+from visualizer import Visualizer
 
 
 class ImageRegistration:
@@ -27,7 +29,7 @@ class ImageRegistration:
         self.ref_keypoints, self.ref_descriptors = self.sift.detectAndCompute(ref_img_gray, None)
         print(f"Reference established. Found {len(self.ref_keypoints)} stable features.")
 
-    def register_image(self, target_img_gray, good_match_ratio=0.5, ransac_thresh=5.0):
+    def register_image(self, target_img_gray, good_match_ratio=0.6, ransac_thresh=5.0):
         """Aligns target_img_gray to the stored reference. Returns aligned image."""
         if self.ref_descriptors is None:
             raise ValueError("Must set reference image before registering.")
@@ -39,6 +41,8 @@ class ImageRegistration:
         for m, n in matches:
             if m.distance < good_match_ratio * n.distance:
                 good_matches.append(m)
+
+        self.last_match_count = len(good_matches)
 
         if len(good_matches) < 10:
             return target_img_gray, None
@@ -52,92 +56,77 @@ class ImageRegistration:
         
         return aligned_img, H_matrix
 
-    @staticmethod
-    def generate_difference_heatmap(ref_aligned, target_aligned):
-        """Generates a visualization of changes between two aligned images."""
-        # Simple absolute difference (pixel-by-pixel subtraction)
-        diff = cv2.absdiff(ref_aligned, target_aligned)
-        
-        # Apply normalization just for visualization so we can see small changes
-        diff_viz = cv2.normalize(diff, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        
-        # Apply a colormap (e.g., JET) to make it look like a heatmap
-        heatmap = cv2.applyColorMap(diff_viz, cv2.COLORMAP_JET)
-        
-        return heatmap
 
-
-def test_real_movement_registration(folder_path):
-    print("--- Testing Real-World Camera Movement ---")
+def run_alignment_time_series(folder_path):
+    # 1. Setup
     provider = ImageProvider(folder_path, chunk_size=2)
-    provider.get_next_chunk()
-    
-    # 1. Hent billeder
-    ref_path = provider.get_next_chunk()[0]
-    ref_img = cv2.imread(ref_path)
-    ref_flat = Preprocessor.flatten_illumination(ref_img, sigma=70)
-
-    for _ in range(1): provider.get_next_chunk()
-    
-    target_path = provider.get_next_chunk()[0]
-    target_img = cv2.imread(target_path)
-    target_flat = Preprocessor.flatten_illumination(target_img, sigma=70)
-
-    # 2. Registration
     reg_engine = ImageRegistration(n_features=3000)
+    
+    # 2. Sæt MASTER REFERENCE (Baseline)
+    ref_chunk = provider.get_next_chunk()
+    if not ref_chunk:
+        print("Ingen billeder fundet."); return
+        
+    ref_img = cv2.imread(ref_chunk[0])
+    ref_flat = Preprocessor.flatten_illumination(ref_img, sigma=70)
     reg_engine.set_reference_image(ref_flat)
-    aligned_target, H_matrix = reg_engine.register_image(target_flat)
 
-    if H_matrix is None:
-        print("Registration Failed!"); return
+    window_name = "Time-Series Alignment Browser"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
-    # 3. Visualiseringer
-    h, w = ref_flat.shape
-    heatmap_error = ImageRegistration.generate_difference_heatmap(ref_flat, target_flat)
-    heatmap_success = ImageRegistration.generate_difference_heatmap(ref_flat, aligned_target)
+    print(f"Master Reference sat: {os.path.basename(ref_chunk[0])}")
+    print("Controls: SPACE/Any key = Næste | Q = Afslut")
 
-    # Checkerboard
-    checkerboard = np.zeros((h, w), dtype=np.uint8)
-    tile_size = 200 # Større tiles gør det nemmere at se fejl
-    for y in range(0, h, tile_size):
-        for x in range(0, w, tile_size):
-            if (x // tile_size + y // tile_size) % 2 == 0:
-                checkerboard[y:y+tile_size, x:x+tile_size] = ref_flat[y:y+tile_size, x:x+tile_size]
-            else:
-                checkerboard[y:y+tile_size, x:x+tile_size] = aligned_target[y:y+tile_size, x:x+tile_size]
-    
-    checker_bgr = cv2.cvtColor(checkerboard, cv2.COLOR_GRAY2BGR)
-    aligned_bgr = cv2.cvtColor(aligned_target, cv2.COLOR_GRAY2BGR)
+    # 3. Loop gennem resten af serien
+    while True:
+        chunk = provider.get_next_chunk()
+        if chunk is None:
+            print("Slut på tidsserien."); break
+        
+        target_path = chunk[0]
+        target_img = cv2.imread(target_path)
+        target_flat = Preprocessor.flatten_illumination(target_img, sigma=70)
+        
+        # Registrering mod master baseline
+        aligned, H = reg_engine.register_image(target_flat)
+        
+        if H is not None:
+            # --- VI BYGGER SELV VORES FRAMES HER ---
+            # Checkerboard til at tjekke kanter
+            checker = Visualizer.create_checkerboard(ref_flat, aligned)
+            
+            # Heatmaps til at se "støj" vs "rigtig ændring"
+            h_before = Visualizer.generate_difference_heatmap(ref_flat, target_flat)
+            h_after = Visualizer.generate_difference_heatmap(ref_flat, aligned)
 
-    # --- FIX AF LAYOUT ---
-    # Top række: To heatmaps (Bredde: w + w = 2w)
-    top_row = np.hstack((heatmap_error, heatmap_success))
-    
-    # Bund række: Checkerboard + Det rettede billede (Bredde: w + w = 2w)
-    bottom_row = np.hstack((checker_bgr, aligned_bgr))
+            # Sammensæt listen af frames og titler
+            frames_to_show = [target_flat, checker, h_before, h_after]
+            titles = [
+                f"Billede: {os.path.basename(target_path)}",
+                f"Checkerboard (Matches: {reg_engine.last_match_count})",
+                "Før Alignment (Movement Error)",
+                "Efter Alignment (Potential Growth)"
+            ]
 
-    # Nu passer bredden! (2w mod 2w)
-    combined = np.vstack((top_row, bottom_row))
+            # --- BRUG DEN UNIVERSELLE METODE ---
+            # Her styrer vi dashboardet via display_height som ønsket
+            dashboard = Visualizer.create_dashboard(
+                frames_to_show, 
+                titles, 
+                rows=2, cols=2, 
+                display_height=1950 # Tilpas denne til din skærm
+            )
+            
+            cv2.imshow(window_name, dashboard)
+        else:
+            print(f"Alignment fejlede for: {os.path.basename(target_path)}")
 
-    # --- RESIZE TIL SKÆRM ---
-    # Dine billeder er åbenbart gigantiske (3548px brede hver!)
-    # Vi skalerer det ned til noget, der kan være på en laptop-skærm.
-    screen_res = (1600, 900) # Eller hvad der passer dig
-    scale_width = screen_res[0] / combined.shape[1]
-    scale_height = screen_res[1] / combined.shape[0]
-    scale = min(scale_width, scale_height)
-    
-    new_size = (int(combined.shape[1] * scale), int(combined.shape[0] * scale))
-    combined_small = cv2.resize(combined, new_size)
+        key = cv2.waitKey(0) & 0xFF
+        if key == ord('q'):
+            break
 
-    # Tilføj tekst efter resize for at holde den læsbar
-    cv2.putText(combined_small, "VENSTRE: Uden alignment | HOJRE: Med alignment", (20, 40), 
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
-    cv2.imshow("Alignment Verification", combined_small)
-    cv2.waitKey(0)
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     PATH = './lotus_kristineberg_prototype/images'
-    test_real_movement_registration(PATH)
+    run_alignment_time_series(PATH)
