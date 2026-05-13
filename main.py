@@ -5,64 +5,40 @@ import os
 from visualizer import Visualizer
 from preprocessing import Preprocessor
 from image_provider import ImageProvider
+from image_registration import ImageRegistration
 
 
+def process_images(data_path, output_path):
+    # Setup
+    provider = ImageProvider(data_path)
+    registration = ImageRegistration(n_features=3000)
+    os.makedirs(output_path, exist_ok=True)
 
-def simple_pipeline(folder_path):
-    # 1. Initialize the provider with chunks of 5
-    provider = ImageProvider(folder_path, chunk_size=2)
-    
-    print("--- Starting Browser ---")
-    print("Controls: Press 'Q' to Quit | Press any other key for the next chunk")
+    #Establish Baseline (Picture set 0)
+    first_pair = provider.get_pair(2)
+    master_img = Preprocessor.process_pair(first_pair)
+    master_img = Preprocessor.downscale(master_img, scale=0.3)
+    master_gray = cv2.cvtColor(master_img, cv2.COLOR_BGR2GRAY)
+    registration.set_reference(master_gray)
 
-    while True:
-        # 2. Get next chunk
-        image_paths = provider.get_next_chunk()
-        
-        # Break if we run out of images
-        if image_paths is None:
-            print("Reached the end of the folder.")
-            break
+    for i in range(3, len(provider)):
+        pair = provider.get_pair(i)
+        ts = provider.timestamps[i]
 
-        # 3. Simple Processing Chain
-        # Step A: Load one raw image for reference
-        raw_img = cv2.imread(image_paths[0])
-        
-        # Step B: Merge the 5 images (Exposure Fusion)
-        fused = Preprocessor.calculate_exposure_fusion(image_paths)
-        
-        # Step C: Flatten the light
-        flat = Preprocessor.flatten_illumination(fused, sigma=50)
-        
-        # Step D: Final Contrast boost
-        # We convert 'flat' to BGR because your apply_clahe expects BGR
-        enhanced = Preprocessor.apply_clahe(cv2.cvtColor(flat, cv2.COLOR_GRAY2BGR))
+        frame = Preprocessor.process_pair(pair)
+        frame_small = Preprocessor.downscale(frame)
+        gray = cv2.cvtColor(frame_small, cv2.COLOR_BGR2GRAY)
 
-        blurred = Preprocessor.gaussian_blur(fused, sigma=2)
+        aligned, H = registration.align(gray)
 
-        # 4. Visualize the 4 steps in a 2x2 grid
-        frames = [raw_img, fused, flat, enhanced, blurred]
-        titles = ["1. Raw Sample", "2. Fused Chunk", "3. Light Flattened", "4. CLAHE Enhanced", "5. Gaussian Blurred"]
-        
-        dashboard = Visualizer.create_dashboard(frames, titles)
+        flat = Preprocessor.flatten_illumination(aligned)
+        final = Preprocessor.apply_clahe(flat)
 
-        # 5. Interaction Logic
-        cv2.imshow("Underwater Processing Browser", dashboard)
-        
-        # Wait for key press
-        key = cv2.waitKey(0) & 0xFF
-        if key == ord('q'):
-            print("Quitting...")
-            break
+        cv2.imwrite(f"{output_path}/aligned_{ts}.png", final)
 
-    cv2.destroyAllWindows()
+        if i % 10 == 0:
+            print(f"Processed: {ts} | Matches: {getattr(registration, 'last_match_count', 'N/A')}")
 
-if __name__ == "__main__":
-    PATH_TO_IMAGES = './lotus_kristineberg_prototype/images' 
-    #PATH_TO_IMAGES = './exposure/images' 
-    
-    
-    if os.path.exists(PATH_TO_IMAGES):
-        simple_pipeline(PATH_TO_IMAGES)
-    else:
-        print(f"Error: Folder '{PATH_TO_IMAGES}' not found.")
+
+if __name__ == "__main__": 
+    process_images('./images', './processed_output')

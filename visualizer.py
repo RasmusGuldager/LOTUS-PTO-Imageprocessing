@@ -69,25 +69,3 @@ class Visualizer:
         diff = cv2.absdiff(ref, target)
         diff_viz = cv2.normalize(diff, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
         return cv2.applyColorMap(diff_viz, cv2.COLORMAP_JET)
-
-    @staticmethod
-    def create_checkerboard(img1, img2, tile_size=200):
-        """Skaber et skakternet-billede til at tjekke alignment."""
-        if len(img1.shape) == 3:
-            img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-        if len(img2.shape) == 3:
-            img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-
-        h, w = img1.shape
-        checker = np.zeros((h, w), dtype=np.uint8)
-        for y in range(0, h, tile_size):
-            for x in range(0, w, tile_size):
-                if (x // tile_size + y // tile_size) % 2 == 0:
-                    checker[y : y + tile_size, x : x + tile_size] = img1[
-                        y : y + tile_size, x : x + tile_size
-                    ]
-                else:
-                    checker[y : y + tile_size, x : x + tile_size] = img2[
-                        y : y + tile_size, x : x + tile_size
-                    ]
-        return checker
